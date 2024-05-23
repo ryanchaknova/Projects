@@ -1,0 +1,261 @@
+---
+title: Which NBA Draft prospects have excelled at their draft position in the Modern
+  Era?
+author: "Ryan Chaknova"
+date: "2024-05-23"
+output: html_document
+---
+
+In this project, I will use k-means to Classify NBA prospects from the 2013 through and including the 2018 draft.
+
+I am stopping for players drafted after 2018 since those players careers are still developing and it would not be so beneficial to draw conclusions on them yet...
+
+Undrafted players are not even considered in this project.
+
+To start the data will look like this and it comes from basketball reference with some extra metrics calculated from it by me
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE} 
+library(plyr)
+library(tidyverse)
+library(knitr)
+library(ggrepel) 
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+draftdata<-read_csv("2013_2023_NBA_PLY_DRAFT.csv")
+
+cols=c("Pk","Yrs","G","MP","PTS","TRB","AST","FGP","F3P","FTP","MPG","PPG","RPG","APG","WS","WS_48","BPM","VORP")
+draftdata[ , cols] <- apply(draftdata[ , cols,drop=F], 2,           
+                    function(x) as.numeric(as.character(x)))
+
+draftdata$GPY <- draftdata$G/draftdata$Yrs
+draftdata$VPY <- draftdata$VORP/draftdata$Yrs
+draftdata$PRA <- draftdata$PPG+draftdata$APG+draftdata$RPG
+draftdata$WS_YR <-draftdata$WS/draftdata$Yrs
+draftdata$WS_YR[draftdata$WS_YR == 0] <- -.1 #THIS IS TO AVOID DIVIDING BY 0 LATER, OUGHT TO BE FINE, THIS MAY HAVE BECOMOME OBSOLETE AS I CHANGED EQUATIONS LATER 
+draftdata <- filter(draftdata,year<2019)#players who are younger in their careers cannot be evaluated yet...
+draftdata %>% drop_na() ->draftdata
+draftdata$YrsRate <- draftdata$Yrs/(2024-draftdata$year)
+sums <- ddply(draftdata,.(year),summarize,sum=sum(WS))
+draftdata$Shares <-  draftdata$WS/merge(draftdata, sums)$sum #% of WS from that players draft class!
+kable(head(draftdata))  
+  
+
+```
+Of the Available data here Win Shares is probaly the #1 way to classify a player as good pr bad
+
+Notice some special metrics. 
+
+"GPY" is games per year
+
+"VPY" is VORP per year
+
+"PRA" is Pts+Rbs+Ast per game 
+
+"WS_YR" is Win Shares per year
+
+"YrsRate" is the % of seasons that player has played since they were drafted 
+
+NOTE!!!![ euro stash players are being hurt here for the year(s) the play overseas (Jokic)]
+
+I think this is actually in the spirit of the metric is being used here 
+
+"Shares" is the % of per year Win Shares that Player got from their own draft class, this one is my favorite
+
+the models in this project will be only based on this "Shares" Metric!
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+sums <- ddply(draftdata,.(year),summarize,sum=sum(WS))
+
+draftdata$WS_YR[draftdata$WS_YR == 0] <- -.1
+draftdata$Shares <-  draftdata$WS/merge(draftdata, sums)$sum
+
+
+means <- sapply(split(draftdata$Shares, draftdata$Pk), mean)
+
+
+
+
+datamean <-data.frame(means)
+datamean$Pk <- seq(1, 60, 1)
+data <- data.frame(dependent = datamean$means, independent = datamean$Pk)
+model <- lm(dependent ~ log(independent), data = data)
+
+
+
+
+
+#summary(model) hide for the html, i looked it looks good, model is solid!
+
+predictionsShares <- predict(model,
+                        data = data,
+                        interval = "prediction",
+                        leve = 0.95)
+
+plot(data$independent, (exp(data$dependent)-1)*100,xlab='Draft Position',ylab="AVG % Draft Class Win Shares",main="Average % of Draft Class Win Shares by Draft Position 2013-2018") #undo the log for the html display, but keep the data log transformed
+lines(100*(exp(predictionsShares[, 1])-1) ~ data$independent, lwd = 2)
+matlines(data$independent, 100*(exp(predictionsShares[, 2:3])-1), lty = 2, lwd = 2)
+
+```
+
+Here we can see the expected range of % Win Shares Per Year, for a given draft position according to a simple linear model
+
+This model (solid line) will be used to get around the "noise" caused by players like Rudy Gobert, Jalen Brunson, or Nikola Jokic, so that we can identify those players later as outliers
+
+Now we compare a players "Shares" to what is expected of their draft position, and see what pops out
+
+First we need to know how many types of players get drafted ie (Hits, Busts, or in between)
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+draftdata$true <- log(draftdata$Shares / (predictionsShares[draftdata$Pk,1])+1) #the training data for k-means
+
+
+n_clusters <- 5
+
+wss <- numeric(n_clusters)
+
+set.seed(5231235)
+
+
+for (i in 1:n_clusters) {
+  km.out <- kmeans(draftdata$true, centers = i, nstart = 20)
+  wss[i] <- km.out$tot.withinss
+}
+
+wss_df <- tibble(clusters = 1:n_clusters, wss = wss)
+ 
+plot_cluster <- ggplot(wss_df, aes(x = clusters, y = wss, group = 1)) +
+    geom_point(size = 5)+
+    geom_line(size=2) +
+    scale_x_continuous(breaks = seq(1:10)) +
+    xlab('Number of clusters')+ylab("~Goodness of new cluster")
+plot_cluster
+
+
+
+```
+
+
+it looks like we could use 2 or 3 clusters on draft prospects, I think having a 3rd will help smooth out the results since some players are in-between being "hits" or "busts"
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+km.out <- kmeans(draftdata$true, centers = 3, nstart = 40)
+
+draftdata$cluster_id <- factor(km.out$cluster)
+
+
+draftdata$cluster_id <- str_replace_all(draftdata$cluster_id, "1", "All-Rights")
+draftdata$cluster_id <- str_replace_all(draftdata$cluster_id, "2", "Busts")
+draftdata$cluster_id <- str_replace_all(draftdata$cluster_id, "3", "Hits")
+
+```
+
+
+This is what that looks like
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 60)) +
+  scale_y_continuous(name="Win Shares Per Year") + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks")
+```
+
+That is little difficult to see who is who beyond the hits, lets do a different graph for every 10 picks
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 10),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 1-10")
+
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(11, 20),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 11-20")
+
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(21, 30),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 21-30")
+
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 40),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 31-40")
+
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(41, 50),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,13)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 41-50 with y-axis scaled up for Jokic")
+
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(51, 60),n.breaks = 10) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks 51-60")
+
+```
+
+Let me be clear, if you are anything but green the idea is you were probably a good pick, but if you are blue, you really excelled given your draft position AND draft class!
+
+It must be understood that plenty of good players who were drafted high will not be blue because they were drafted high or come from a better class.
+
+
+
+There is also still a bias against younger players who have not reached their peak yet.
+
+And anywhere Win Shares has a blind spot, this will as well
+
+Lets see this year over year, to ponder on past drafts
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+ggplot(filter(draftdata,year==2013   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick",limits = c(1,30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013 Round 1")
+
+ggplot(filter(draftdata,year==2013   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2013 Round 2")
+
+ggplot(filter(draftdata,year==2014   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2014 Round 1")
+
+ggplot(filter(draftdata,year==2014   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,13)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2014 Round 2 with y axis scaled up for Jokic") #lol jokic keeps going off the graph
+
+ggplot(filter(draftdata,year==2015   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2015 Round 1")
+
+ggplot(filter(draftdata,year==2015   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2015 Round 2")
+
+ggplot(filter(draftdata,year==2016   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2016 Round 1")
+
+ggplot(filter(draftdata,year==2016   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2016 Round 2")
+
+ggplot(filter(draftdata,year==2017   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2017 Round 1")
+
+ggplot(filter(draftdata,year==2017   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2017 Round 2")
+
+ggplot(filter(draftdata,year==2018   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 30),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2018 Round 1")
+
+ggplot(filter(draftdata,year==2018   ) , aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(31, 60),n.breaks = 6) +
+  scale_y_continuous(name="Win Shares Per Year",limits=c(-2,10)) + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F) +ggtitle(label="2018 Round 2")
+```
+
+
+What is to be done next is to use machine learning to predict which prospects will be "blue" based on their draft profile.
+
+To use AI to identify good value in the NBA draft, this appears to be best suited for picks outside the lottery, "sleepers"
+

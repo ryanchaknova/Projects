@@ -1,0 +1,107 @@
+---
+title: "NBA Eras"
+author: "Ryan Chaknova"
+date: "2024-05-22"
+output: html_document
+
+---
+
+Here, I will attempt to sequence NBA history into statistically significant "eras". The purpose of this is to be better able to stay focused on a 
+
+single era when looking at statistics as a whole, since these eras seem to cause problems for machine learning algorithms. By restricting the 
+
+training data to one era, more can be learned from the results of the models and algorithms. After all, how useful is a model trained in the 80's and 
+90's going to be in 2025? No, it needs to be trained since the "modern era" started. 
+
+
+I've gotten started with some data from basketball reference, it looks like this, only with a lot more rows, having years from 1980-2024
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+#make sure to load theese in this order!
+#library(plyr)
+library(tidyverse)
+library(knitr)
+#library(dplyr)
+#library(factoextra)
+#library(ggplot2)
+
+
+#library(ggrepel)
+#library(sqldf)
+
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+
+
+data=read_csv("1980_2024_NBA-TM_BSC.csv")
+
+kable(head(data))
+
+data_num <- subset(data, select = -c(Team,MP,G))
+
+```
+
+I will use an algorithm called k-means, which measures the differences in the teams statistics over time, and will assign them to similar chunks, if 
+
+done correctly, clusters should be from consecutive years, giving us the NBA's Eras
+
+
+
+To start, we need to find estimations for how many eras there even are, the following graph will show how much more clear a cluster becomes when you 
+
+add a new one, once the returns of adding a new cluster get small enough, we know we've found the right amount of clusters
+
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+
+n_clusters <- 5
+
+wss <- numeric(n_clusters)
+
+set.seed(522223930)
+
+
+for (i in 1:n_clusters) {
+  km.out <- kmeans(data_num, centers = i, nstart = 20)
+  wss[i] <- km.out$tot.withinss
+}
+
+wss_df <- tibble(clusters = 1:n_clusters, wss = wss)
+ 
+plot_cluster <- ggplot(wss_df, aes(x = clusters, y = wss, group = 1)) +
+    geom_point(size = 5)+
+    geom_line(size=2) +
+    scale_x_continuous(breaks = seq(1:10)) +
+    xlab('Number of clusters')+ylab("~Goodness of new cluster")
+plot_cluster
+
+```
+
+It appears that after 3 clusters, we are no longer getting a cluster that tells us anything useful, so we will use 3 clusters or "eras"
+
+
+Lets visualize thees clusters to see if it worked in dividing the NBA into eras, using 3 pointers attempted per game on the vertical axis to help 
+
+show the change over time
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+
+# Select number of clusters
+k <- 3
+set.seed(522224935)
+# Build model with k clusters: km.out
+km.out <- kmeans(data_num, centers = k, nstart = 20)
+
+data_num$cluster_id <- factor(km.out$cluster)
+
+
+ggplot(data_num, aes(year,ThreePA, color = cluster_id)) +
+    geom_point() +
+    xlab("Year") +
+    ylab("3PA/G")
+```
+
+Wow, that's amazing, k-means near perfectly dissected the NBA into 3 distinct eras. It seems machine learning trying to be used on today game 
+
+should perhaps only be trained on data starting around 2015, since what the model will find as a good predictor in the other eras may be  DIFFERENT!
