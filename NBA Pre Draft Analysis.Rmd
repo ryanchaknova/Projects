@@ -1,0 +1,327 @@
+---
+title: "2013-2018 Pre NBA Draft Analysis of College Players"
+author: "Ryan Chaknova"
+date: "2024-05-26"
+output: html_document
+---
+
+2013_2023_NBA_PLY_DRAFT 2013_2018_COLLEGE_DRAFT_STATS_LAST
+
+```{r}
+library(plyr)
+library(tidyverse)
+library(factoextra)
+library(ggplot2)
+
+library(dplyr)
+library(ggrepel)
+library(sqldf)
+library(ggcorrplot)
+
+
+library(xgboost)
+library(caret)
+library(cvms)
+library(caTools)
+
+library(randomForest)
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+# mapvalues(x, from, to, warn_missing = TRUE)
+# Arguments
+# x	
+# the factor or vector to modify
+# 
+# from	
+# a vector of the items to replace
+# 
+# to	
+# a vector of replacement values
+
+
+
+```
+
+
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+draftdata<-read_csv("2013_2023_NBA_PLY_DRAFT.csv")
+player_data<-read_csv("2013_2018_COLLEGE_DRAFT_STATS_LAST.csv")
+player_data <- na.omit(player_data)
+modded_names<-c("Otto Porter","Tim Hardaway Jr","Glen Rice Jr",
+                "James Ennis","TJ Warren","PJ Hairston"
+,"CJ Wilcox"
+,"KJ McDaniels"
+,"Johnny OBryant"
+,"Glenn Robinson"   
+,"Roy Devyn Marble"
+,"DAngelo Russell"
+,"Kelly Oubre"
+,"Larry Nance"
+,"RJ Hunter"
+,"Joseph Young"
+,"DeAndre Bembry"
+,"Skal Labissiere"
+,"AJ Hammons"
+,"kahlil felder"
+,"DeAaron Fox"
+,"Dennis SmithJr"
+,"DJ Wilson"
+,"TJ Leaf"
+,"Frank Mason"
+,"edrice Adebayo"
+,"wesley iwundu"
+,"Marvin BagleyIII"
+,"Jaren JacksonJr"
+,"Wendell CarterJr"
+,"Troy Brown"
+,"Lonnie Walker"
+,"Devonte Graham"
+,"Gary TrentJr"
+,"mohamed bamba"
+,"DeAnthony Melton"
+,"sviatoslav mykhailiuk"
+,"malik milton"
+,"raymond spalding"
+)
+
+orgl_names=c('Otto Porter Jr.','Tim Hardaway Jr.','Glen Rice Jr.',"James Ennis III","T.J. Warren","P.J. Hairston","C.J. Wilcox","K.J. McDaniels","Johnny O'Bryant","Glenn Robinson III","Devyn Marble","D'Angelo Russell",
+"Kelly Oubre Jr.","Larry Nance Jr.","R.J. Hunter","Joe Young","DeAndre' Bembry","Skal Labissière","A.J. Hammons","Kay Felder",
+"De'Aaron Fox","Dennis Smith Jr.","D.J. Wilson","T.J. Leaf","Frank Mason III","Bam Adebayo","Wes Iwundu","Marvin Bagley III","Jaren Jackson Jr.","Wendell Carter Jr.","Troy Brown Jr.","Lonnie Walker IV","Devonte' Graham",
+"Gary Trent Jr.","Mo Bamba","De'Anthony Melton","Svi Mykhailiuk","Shake Milton","Ray Spalding"
+)
+
+
+player_data$Player<-mapvalues(player_data$Player,modded_names,
+                              orgl_names)
+  
+draftdata <- draftdata %>% 
+  semi_join(player_data, by = "Player")
+
+cols=c("Pk","Yrs","G","MP","PTS","TRB","AST","FGP","F3P","FTP","MPG","PPG","RPG","APG","WS","WS_48","BPM","VORP")
+draftdata[ , cols] <- apply(draftdata[ , cols,drop=F], 2,           
+                    function(x) as.numeric(as.character(x)))
+
+draftdata$GPY <- draftdata$G/draftdata$Yrs
+draftdata$VPY <- draftdata$VORP/draftdata$Yrs
+draftdata$PRA <- draftdata$PPG+draftdata$APG+draftdata$RPG
+draftdata$WS_YR <-draftdata$WS/draftdata$Yrs
+draftdata$WS_YR[draftdata$WS_YR == 0] <- -.1 #THIS IS TO AVOID DIVIDING BY 0 LATER, OUGHT TO BE FINE, THIS MAY HAVE BECOMOME OBSOLETE AS I CHANGED EQUATIONS LATER 
+draftdata <- filter(draftdata,year<2019)#players who are younger in their careers cannot be evaluated yet...
+draftdata %>% drop_na() ->draftdata
+draftdata$YrsRate <- draftdata$Yrs/(2024-draftdata$year)
+sums <- ddply(draftdata,.(year),summarize,sum=sum(WS))
+draftdata$Shares <-  draftdata$WS/merge(draftdata, sums)$sum #% of WS from that players draft class!
+kable(head(draftdata)) 
+
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+sum(!complete.cases(train_data))
+sums <- ddply(draftdata,.(year),summarize,sum=sum(WS))
+
+draftdata$WS_YR[draftdata$WS_YR == 0] <- -.1
+draftdata$Shares <-  draftdata$WS/merge(draftdata, sums)$sum
+
+
+means <- sapply(split(draftdata$Shares, draftdata$Pk), mean)
+
+
+
+
+datamean <-data.frame(means)
+sequence <- seq(1, 60, 1)
+
+# Exclude the number 57 using logical indexing
+sequence_without_57 <- sequence[sequence != 57]
+datamean$Pk <- sequence_without_57
+data <- data.frame(dependent = datamean$means, independent = datamean$Pk)
+model <- lm(dependent ~ log(independent), data = data)
+
+
+
+
+
+#summary(model) hide for the html, i looked it looks good, model is solid!
+
+predictionsShares <- predict(model,
+                        data = data,
+                        interval = "prediction",
+                        leve = 0.95)
+
+plot(data$independent, (exp(data$dependent)-1)*100,xlab='Draft Position',ylab="AVG % Win Shares",main="Average % of College Players Win Shares by Draft Position 2013-2018") #undo the log for the html display, but keep the data log transformed
+lines(100*(exp(predictionsShares[, 1])-1) ~ data$independent, lwd = 2)
+matlines(data$independent, 100*(exp(predictionsShares[, 2:3])-1), lty = 2, lwd = 2)
+
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+draftdata$true <- log(draftdata$Shares / (predictionsShares[seq(1,59,1),1])+1) #the training data for k-means
+
+
+n_clusters <- 5
+
+wss <- numeric(n_clusters)
+
+set.seed(5231235)
+
+
+for (i in 1:n_clusters) {
+  km.out <- kmeans(draftdata$true, centers = i, nstart = 20)
+  wss[i] <- km.out$tot.withinss
+}
+
+wss_df <- tibble(clusters = 1:n_clusters, wss = wss)
+ 
+plot_cluster <- ggplot(wss_df, aes(x = clusters, y = wss, group = 1)) +
+    geom_point(size = 5)+
+    geom_line(size=2) +
+    scale_x_continuous(breaks = seq(1:10)) +
+    xlab('Number of clusters')+ylab("~Goodness of new cluster")
+plot_cluster
+
+
+
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+km.out <- kmeans(draftdata$true, centers = 3, nstart = 40)
+
+draftdata$cluster_id <- factor(km.out$cluster)
+
+
+
+```
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+
+draftdata$cluster_value<-as.numeric(draftdata$cluster_id)
+
+```
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+ggplot(draftdata, aes(Pk,WS_YR, color = cluster_id)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="Draft Pick", limits=c(1, 60)) +
+  scale_y_continuous(name="Win Shares Per Year") + geom_label_repel(aes(label = Player),box.padding = .05,label.padding = .25,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks")
+```
+
+THIS AI IS NOT GOING TO BE THAT GOOD, IM JUST LEARNING SOME THINGS THAT WILL HELP ME MAKE A BETTER ONE IN THE FUTURE
+
+
+IT IS TRAINED ON FINDING WHICH PLAYERS IN COLLEGE ARE MOST LIKLEY TO FIND NBA SUCCESS WITH NO REGARD FOR LITTERALY ANY OF THE OTHER PLAYERS IN THE WORLD, MANY OF THE BEST PLAYERS NEVER PLAYED COLLEGE BALL IN THE MODERN ERA...
+
+ALL OF THAT WAS MOSTLY GETTING OF TARGET DATA, NOW LETS ANALYIZE THE TRAINING DATA
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+player_data$cluster_value<-draftdata$cluster_value
+
+train_data <- player_data[sapply(player_data, is.numeric)]
+train_data <- train_data[, -1]
+```
+
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+cor_matrix <- cor(train_data)
+
+# Extract the correlation of 'score' with other variables
+cor_with_score <- cor_matrix['cluster_value', ]
+
+cor_df <- data.frame(
+  variable = names(cor_with_score),
+  correlation = cor_with_score
+)
+
+# Print the data frame
+print(cor_df[order(cor_df$correlation,decreasing = T), ])
+
+#top skills, rebounding, fg%, PER,BPM, WS/40, CONFRENCE DATA, NOT NON-CONF!!!!!(i imagine this could be reversed for good players in bad conf but this is rare, the better players are in the better confs) 
+
+#GOOD FG%, TRB
+
+#EHH  TOV FT
+
+#BAD COORS 3 POINT SHOOTING, ASST, STL, DRTG
+```
+
+
+OKAY, LET"S MAKE SOME ARTIFICIAL INTELIGENCE
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+sample<- sample.int(n=nrow(train_data),size=floor(.8*nrow(train_data)),replace=FALSE)
+train<-train_data[sample,]
+test<-train_data[-sample,]
+
+testPlayers<-train_data[-sample,] 
+testPlayers$Players<-player_data$Player[-sample]
+
+x_test<-test[,-157]
+y_test<-test[,157]
+x_train<-train[,-157]
+y_train<-train[,157]
+
+
+```
+
+
+
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+model <- randomForest(
+  formula = y_train$cluster_value ~ .,
+  data = x_train
+)
+model
+which.min(model$mse)
+sqrt(model$mse[which.min(model$mse)]) 
+plot(model)
+```
+
+```{r}
+varImpPlot(model) 
+model_tuned <- tuneRF(
+               x=x_train[,-156], #define predictor variables
+               y=y_train$cluster_value, #define response variable
+               ntreeTry=500,
+               mtryStart=4, 
+               stepFactor=1.5,
+               improve=0.01,
+               trace=FALSE #don't show real-time progress
+               )
+
+
+```
+
+
+```{r}
+
+predictions<-data.frame(predict(model, newdata=x_test)) #NEWDATA IS OUR X and out AI is F, F(X)=Y Y is our PREDICTION!
+predictions$player<-testPlayers$Players
+predictions$win<-predictions[[1]]
+predictions$PER<-x_test$PER
+
+print(predictions)
+```
+
+REMEMBER, THE AI IS NOT TRYING TO FIND GOOD NBA PLAYERS, ITS TRYING TO FIND GOOD DRAFT VALUE!, THIS IS CRIUCIAL TO UNDERSTAND!
+
+ALSO, THE TRAINING DATA IS SUB-PAR, THIS IS ONLY VERSION 0.1!!!!!!
+
+
+```{r}
+
+ggplot(predictions, aes(PER,win)) +
+    geom_point(alpha = 1) + scale_x_continuous(name="College PER") +
+  scale_y_continuous(name="Value Prediction") + geom_label_repel(aes(label = player),box.padding = .04,label.padding = .2,label.size = 0,point.padding = 0, show_guide = F)+ggtitle(label="2013-2018 Picks test set")
+```
+
+I Will gather some 2024 college data and throw it in to this AI model and see what it says, The predictions are not great for now...
+FOR ONE, we are predicting pretty much no hits, Its more of a bust predictor though... hmm that maybe is the usful part of version 0.1!
