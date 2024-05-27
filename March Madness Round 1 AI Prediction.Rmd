@@ -1,0 +1,470 @@
+---
+title: "College Data"
+output: html_document
+date: "2024-05-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(xgboost)
+library(caret)
+library(cvms)
+library(caTools)
+library(ggcorrplot)
+library(randomForest)
+```
+
+## R Markdown
+
+
+```{r}
+
+df<-read.csv("college.csv")
+
+```
+
+
+
+
+```{r}
+#df$W.s[df$W.s > 0] <- 1 
+df$Pd<-df$Tm./df$Opp.
+
+dfyears<-df
+
+cols=c("W.L.","SRS","SOS","Pd","FG.","X3P.","X3P","FT","FT.","ORB","TRB","AST","STL","BLK","TOV","W.s")
+
+
+df<-select(df,cols)
+
+cols=c("W.L.","SRS","SOS","Pd","FG.","X3P.","X3P","FT","FT.","ORB","TRB","AST","STL","BLK","TOV","W.s","year","Team")
+
+dfyears<-select(dfyears,cols)
+
+df2023<-filter(dfyears,year==2023)
+cols=c("W.L.","SRS","SOS","Pd","FG.","X3P.","X3P","FT","FT.","ORB","TRB","AST","STL","BLK","TOV","W.s")
+df2023<-select(df2023,cols)
+```
+```{r}
+
+sum(!complete.cases(df))
+
+
+sample<- sample.int(n=nrow(df),size=floor(.8*nrow(df)),replace=FALSE)
+train<-df[sample,]
+test<-df[-sample,]
+testteams<-dfyears[-sample,]
+
+
+x_test<-test[,-16]
+y_test<-test[,16]
+x_train<-train[,-16]
+y_train<-train[,16]
+```
+```{r}
+corr <- round(cor(df), 1)
+ggcorrplot(corr)
+```
+lets use some differnce AI's
+
+```{r}
+#go back to number wins 
+model <- randomForest(
+  formula = y_train ~ .,
+  data = x_train
+)
+model
+which.min(model$mse)
+sqrt(model$mse[which.min(model$mse)]) 
+plot(model)
+```
+
+```{r}
+varImpPlot(model) 
+model_tuned <- tuneRF(
+               x=x_train[,-16], #define predictor variables
+               y=y_train, #define response variable
+               ntreeTry=500,
+               mtryStart=4, 
+               stepFactor=1.5,
+               improve=0.01,
+               trace=FALSE #don't show real-time progress
+               )
+
+
+```
+
+
+```{r}
+
+predictions<-data.frame(predict(model, newdata=x_test))
+predictions$team<-testteams$Team
+predictions$win<-predictions[[1]]
+#predictions<-filter(predictions,win>=1)
+
+#winners<-select(filter(teams,W.s>0),Team)
+
+predictions$win[predictions$win < 1.1] <- 0
+predictions$win[predictions$win >= 1.1] <- 1 
+
+
+df2023$W.s[df2023$W.s > 0] <- 1 
+y_test[y_test>0]<-1
+
+
+
+
+#if we only select predicted >1
+
+#predictions<-filter(predictions,win>=1)
+#y_test<-y_test[y_test>0]
+
+#select the same 20 teams from df2023 that are still in preditions
+
+
+predictions$win
+y_test
+accuracy <- sum(predictions$win == y_test) / nrow(predictions)
+accuracy
+```
+test over more years to gain sample size confidence
+```{r}
+predictions<-data.frame(predict(model, newdata=x_test))
+predictions$team<-testteams$Team
+predictions$win<-predictions[[1]]
+#predictions<-filter(predictions,win>=1)
+
+#winners<-select(filter(teams,W.s>0),Team)
+
+predictions$win[predictions$win < 1.1] <- 0
+predictions$win[predictions$win >= 1.1] <- 1 
+
+```
+
+100% accuracy for 18 of 30 games loaded in, useing regression predicter greater than 1.1 games won in march madness using random forest
+
+
+
+```{r}
+confusionMatrix(as.factor(predictions$win), factor(df2023$W.s,levels=0:6))
+```
+
+
+
+```{r}
+
+cm <- confusionMatrix(factor(predictions$win), factor(df2023$W.s,levels = 0:6))
+cfm <- as_tibble(cm$table)
+plot_confusion_matrix(cfm, target_col = "Reference", prediction_col = "Prediction", counts_col = "n")
+
+```
+```{r}
+dfWinners<-filter(teams,W.s>0)
+
+D2 <- predictions %>% dplyr::filter(!team %in% dfWinners$Team)
+
+D2
+```
+The one miss, was a team the BARLEY made the "1" mark to be considered a good pick
+
+
+```{r}
+
+
+
+xgb_train<-xgb.DMatrix(data=as.matrix(x_train),label=y_train)
+xgb_test<-xgb.DMatrix(data=as.matrix(x_test),label=y_test)
+
+xgb_params <- list(
+  booster="gbtree",
+  eta=0.01,
+  max_depth=8,
+  gamma=4,
+  colsample_bytree=1,
+  objective="multi:softprob",
+  eval_metric="mlogloss",
+  num_class=length(levels(as.factor(df$W.s)))) 
+
+```
+
+
+```{r}
+xgb_model<-xgb.train(params=xgb_params,data=xgb_train,nround=5000,verbose=1)
+
+
+
+```
+
+
+
+
+start with srs,sos,mov,hob,ft/fga,
+add more data
+
+add code from desktop to jup asap
+
+
+
+```{r}
+feature_scores<-xgb.importance(feature_names = colnames(xgb_train),model=xgb_model)
+feature_scores
+```
+
+
+
+wow, really need more features
+
+
+if you want to plot feature scores...
+```{r}
+
+xgb.plot.importance(feature_scores)
+```
+
+
+onto predictions
+
+
+```{r}
+x_test<-df2023[,-16]
+xgb_preds <- predict(xgb_model, as.matrix(x_test), reshape = TRUE)#reminder, to say, predict the upcoming march, put that seasons data in x_test HERE
+xgb_preds <- as.data.frame(xgb_preds)
+colnames(xgb_preds) <- levels(factor(df$W.s))
+#xgb_preds
+
+predicter<-xgb_preds
+teams<-filter(dfyears,year==2023)
+predicter$team<-teams$Team
+
+xgb_preds$PredictedClass <- apply(xgb_preds, 1, function(y) colnames(xgb_preds)[which.max(y)])
+
+predicter
+#UNCOMMENT THIS CODE BELOW WpreiHEN TESTING OLD DATA, AND NOT PREDICTING
+
+#xgb_preds$ActualClass <- levels(factor(df$W.s))[y_test + 1]
+#xgb_preds
+
+predicter$Win<-predicter[[2]]
+predicter$Team<-predicter$team
+predicter<-filter(predicter,Win>=.75)
+predicter
+```
+
+a 75% confidence level successfully predicted the outcome of 14/15 march madness round 1 games in 2023
+
+
+
+```{r}
+accuracy <- sum(xgb_preds$PredictedClass == xgb_preds$ActualClass) / nrow(xgb_preds)
+accuracy
+
+```
+
+check the confuse matrix
+```{r}
+confusionMatrix(as.factor(xgb_preds$ActualClass), factor(xgb_preds$PredictedClass,levels=0:6))
+```
+```{r}
+
+cm <- confusionMatrix(factor(xgb_preds$ActualClass), factor(xgb_preds$PredictedClass,levels = 0:6))
+cfm <- as_tibble(cm$table)
+plot_confusion_matrix(cfm, target_col = "Reference", prediction_col = "Prediction", counts_col = "n")
+
+```
+
+
+Dont mind the roullete sim down here, had to show a friend their strategy sucked
+```{r }
+#3 outcomes can happen 
+
+#we make four bets, call them bet_col1 
+
+
+```
+
+```{r}
+get_rolls <- function()
+{
+  set.seed(NULL)
+  return <- sample(1:38,1000,replace=TRUE)
+}
+
+
+```
+
+```{r}
+get_bets <- function(ROLL,bet1,bets1,bet2,bets2,bet3,bets3,bet4,bets4)
+{
+for (i in 1:1000)
+{
+  if (ROLL[i] %in% bet1) #bet hit
+    {
+      bets1[i]<-TRUE
+  }
+  else
+  {
+      bets1[i]<-FALSE
+  }
+   if (ROLL[i] %in% bet2) #bet hit
+    {
+      bets2[i]<-TRUE
+  }
+  else
+  {
+      bets2[i]<-FALSE
+  }
+   if (ROLL[i] %in% bet3) #bet hit
+    {
+      bets3[i]<-TRUE
+  }
+  else
+  {
+      bets3[i]<-FALSE
+  }
+   if (ROLL[i] %in% bet4) #bet hit
+    {
+      bets4[i]<-TRUE
+  }
+  else
+  {
+      bets4[i]<-FALSE
+  }
+}
+  return <- list(bets1,bets2,bets3,bets4)
+}
+
+
+```
+
+
+```{r}
+big_bets <- function(bets1,bets2,bets3,bets4)
+{
+bigbets<-c()
+
+for (i in 1:1000)
+{
+  if((((bets1[i]==TRUE )| (bets2[i])==TRUE)  )&  (((bets3[i]==TRUE) | (bets4[i])==TRUE)  ) )
+  {
+    bigbets[i]<-TRUE
+  }
+  else
+  {
+    bigbets[i]<-FALSE
+  }
+}
+return <-bigbets 
+}
+```
+
+
+```{r}
+small_bets <-function(bets1,bets2,bets3,bets4)
+{
+smallbets<-c()
+
+for (i in 1:1000)
+{
+  if(  (bets1[i]==TRUE) | (bets2[i]==TRUE)|(bets3[i]==TRUE) | (bets4[i]==TRUE)  )
+  {
+    smallbets[i]<-TRUE
+  }
+  else
+  {
+    smallbets[i]<-FALSE
+  }
+}
+return <- smallbets
+}
+```
+
+
+```{r}
+run_sim <-function(bigbets,smallbets)
+{
+start<-100
+amount<-100
+final<-start
+results<-c()
+x<-0
+up<-FALSE
+for (i in 1:1000)
+{
+  if(final<start)
+  {
+    amount<-start-final
+  }
+  
+  if(bigbets[i] == TRUE)
+  {
+    final<-(final+(1.5*amount))
+  }
+  else if (smallbets[i]==TRUE)
+  {
+    final<-(final- (.25*amount))
+  }
+  else
+  {
+    final <- final-(amount)
+  }
+  if(final <= 99)
+  {
+    x<-x+1
+    #print("you lost all your money after {i} hands")
+    results[x]<-(sprintf("You can no longer bet your amount after %s Rolls\n",i))
+    break
+  }
+  if(final > start)
+  {
+    x<-x+1
+    profit<-final-start
+    results[x]<-(sprintf("you currently have more than you started by %s \n",profit))
+    
+    up<-TRUE
+    break
+  }
+
+  #print(paste(sprintf("After %s rolls you have",i), sprintf("$%s dollars left",final), sep = " "))
+}
+message(results)
+return <- (final-start)
+
+}
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+total<-0
+values<-seq(1,38,1)
+
+bet1<-seq(1,12,1)
+bet2<-seq(13,24,1)
+
+bet3<-c(1,34,3)
+bet4<-c(2,35,3)
+ups=c()
+results=c()
+for (i in 1:100)
+{
+ROLLS <- get_rolls()
+bets1<-c()
+bets2<-c()
+bets3<-c()
+bets4<-c()
+bets<-get_bets(ROLLS,bet1,bets1,bet2,bets2,bet3,bets3,bet4,bets4)
+bigbets<-big_bets(bets[[1]],bets[[2]],bets[[3]],bets[[4]])
+smallbets<-small_bets(bets[[1]],bets[[2]],bets[[3]],bets[[4]])
+ups[i]<-run_sim(bigbets,smallbets)
+Sys.sleep(.01)
+}
+print(mean(ups))
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
